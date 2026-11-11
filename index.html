@@ -122,7 +122,7 @@ details[open] summary{margin-bottom:8px}
 <header>
   <h1>Aresti Wind Solver</h1>
   <span class="sub">Plan figure placement and wind drift in the 1,000 m aerobatic box</span>
-  <span class="pill warn" style="font-size:12px" title="Generic Extra 330SC numbers; each figure entered at its planned speed. Replace with AcroWorx-measured performance.">DEMO · generic performance until AcroWorx data</span>
+  <span class="pill warn" style="font-size:12px" title="Sukhoi Su-26 numbers estimated by the pilot from memory; each figure entered at its planned speed. Replace with AcroWorx-measured performance.">DEMO · Su-26 pilot estimates until AcroWorx data</span>
 </header>
 
 <div class="layout">
@@ -216,10 +216,10 @@ details[open] summary{margin-bottom:8px}
       </div>
       <div style="display:flex;flex-direction:column;gap:4px;margin-top:8px">
         <label class="check"><input type="checkbox" id="autoGap" checked> Auto-place figures (choose connecting lines to stay in box)</label>
-        <label class="check"><input type="checkbox" id="crab" checked> Correct crosswind on connecting lines</label>
+        <label class="check"><input type="checkbox" id="crab"> Correct crosswind on connecting lines</label>
         <label class="check"><input type="checkbox" id="crabAll"> Also correct crosswind on lines inside figures</label>
         <label class="check"><input type="checkbox" id="roundLoops" checked> Fly loops round over the ground (vary g for wind)</label>
-        <label class="check"><input type="checkbox" id="showCalm" checked> Show no-wind track</label>
+        <label class="check"><input type="checkbox" id="showCalm"> Show no-wind track</label>
         <label class="check"><input type="checkbox" id="showWind" checked> Show moving wind</label>
       </div>
     </section>
@@ -1151,6 +1151,8 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     ['rtRate', 'Rolling turn °/s', 30], ['brake', 'Idle + airbrake decel (g)', 0.6], ['gLimPos', 'G limit positive', 10], ['gLimNeg', 'G limit negative', 10], ['lineUnit', 'Line unit m', 12], ['kind', 'Induced drag factor', 0.08],
   ];
   const PRESETS = {
+    // Su-26: pilot estimates from memory (Brooks, Nov 2026) pending AcroWorx data; g limits are the pilot's, inside the +11/-9 airframe limits
+    'Sukhoi Su-26': { ventry: 160, vmax: 175, vne: 243, vSeqMax: 175, vs: 60, rollRate: 360, snapRate: 450, loopG: 6, pushLoopG: 4.5, cornerG: 7, pushCornerG: 5, tw: 0.5, vPivotKt: 35, pivotTime: 2.5, hesitation: 0.6, hesitation8: 0.4, rtRate: 30, spinTurnTime: 1.4, spinFt: 380, brake: 0.45, gLimPos: 9.5, gLimNeg: 6 },
     'Extra 330SC / LX': { ventry: 160, vmax: 210, vne: 220, vs: 55, rollRate: 400, snapRate: 500, loopG: 7, pushLoopG: 4.5, tw: 0.32 },
     'Extra 300L': { ventry: 150, vmax: 185, vne: 219, vs: 55, rollRate: 340, snapRate: 430, loopG: 5, pushLoopG: 4, tw: 0.27 },
     'Edge 540': { ventry: 165, vmax: 215, vne: 230, vs: 55, rollRate: 420, snapRate: 520, loopG: 5.5, pushLoopG: 4.5, tw: 0.34 },
@@ -1173,9 +1175,9 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   const DEFAULT_WIND = [['SFC', 270, 6], [1000, 270, 10], [2000, 280, 14], [3000, 290, 18], [4000, 290, 20], [6000, 300, 24]];
 
   let state = {
-    seq: SAMPLE, ac: {}, preset: 'Extra 330SC / LX', wind: DEFAULT_WIND.map(r => r.slice()), altRef: 'msl', elev: 0,
+    seq: SAMPLE, ac: {}, preset: 'Sukhoi Su-26', wind: DEFAULT_WIND.map(r => r.slice()), altRef: 'msl', elev: 0,
     rules: 'CIVA Advanced (power)', lowFt: 656, highFt: 3609, facing: 0, jdist: 150, startAlt: 2500, energy: 'managed',
-    autoGap: true, crab: true, crabAll: false, roundLoops: true, showWind: true, windFollow: true, windLevelFt: 3000, showCalm: true, entry: '', figOpts: [], form: 'B', fview: 'aresti', floorFt: 300, comfortM: 300, finishPct: 20, startX: null, startY: null, marginPct: 5, diveFt: 300, autoSolve: true,
+    autoGap: true, crab: false, crabAll: false, roundLoops: true, showWind: true, windFollow: true, windLevelFt: 3000, showCalm: false, entry: '', figOpts: [], form: 'B', fview: 'aresti', floorFt: 300, comfortM: 300, finishPct: 20, startX: null, startY: null, marginPct: 5, diveFt: 300, autoSolve: true,
   };
   [...FIELDS, ...MORE].forEach(([k, , v]) => state.ac[k] = v);
   Object.assign(state.ac, PRESETS[state.preset]);
@@ -1184,8 +1186,10 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   if (state.ac.hesitation === 0.25) state.ac.hesitation = 0.5; // old default
   if (!RULES[state.rules]) state.rules = 'CIVA Advanced (power)';
   if (!/^(level|carry|managed)$/.test(state.energy)) state.energy = 'managed'; // height is only changed by flying, never on a level line
+  if (!state.crabV1) { state.crab = false; state.showCalm = false; state.crabV1 = true; }
   if (!state.autoV1) { state.autoSolve = true; state.autoV1 = true; }
   if (!state.demoV3) { state.energy = 'managed'; state.demoV2 = state.demoV3 = true; state.preset = 'Extra 330SC / LX'; [...FIELDS, ...MORE].forEach(([k, , v]) => state.ac[k] = v); Object.assign(state.ac, PRESETS[state.preset]); }
+  if (!state.suV1) { state.suV1 = true; state.preset = 'Sukhoi Su-26'; [...FIELDS, ...MORE].forEach(([k, , v]) => state.ac[k] = v); Object.assign(state.ac, PRESETS[state.preset]); }
   if (state.seq === '44c2 m1- -h2f n(24)24- -5is;8ibb 6m 6fic2- -a3;34 8pb3 m44;24 3jo3') state.seq = SAMPLE;
   function save() { try { localStorage.setItem('bdp-v1', JSON.stringify(state)); } catch (e) { } }
 
@@ -1268,7 +1272,33 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   const PAL_L = ['#d9480f', '#1971c2', '#2b8a3e', '#9c36b5', '#c2255c', '#0c8599', '#e67700', '#5f3dc4'];
   const PAL_D = ['#ff7a3d', '#4dabf7', '#51cf66', '#cc5de8', '#f06595', '#22b8cf', '#fcc419', '#9775fa'];
   const isDark = () => css('--bg').toLowerCase() === '#0f1519';
-  const figColor = i => i < 0 ? css('--ok') : (isDark() ? PAL_D : PAL_L)[i % 8];
+  const figColor = i => css('--ink');
+  // Level flight is coloured by ground speed against a 170 kt reference level speed:
+  // green = faster over the ground (downwind), red = slower (driving into wind; darker = slower). Climbs, dives and looping parts stay grey.
+  const GS_REF_KT = 170, GS_FULL = 20 * 0.514444; // ±20 kt from the reference is full colour
+  function gsDelta(a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, d = Math.hypot(dx, dy, dz);
+    if (!(d > 0) || Math.abs(dz) / d > 0.17 || b.el === 'pull' || b.el === 'push') return 0;            // not level (more than ~10°): neutral
+    const h = Math.hypot(dx, dy), w = windAtZ(b.z), ref = GS_REF_KT * 0.514444;
+    const fx = b.f ? b.f[0] : dx / h, fy = b.f ? b.f[1] : dy / h, fh = Math.hypot(fx, fy) || 1;
+    return Math.hypot(ref * fx / fh + w[0], ref * fy / fh + w[1]) - ref; // ground speed at 170 kt TAS minus 170 kt
+  }
+  function gsColor(dv) {
+    const t = Math.max(-1, Math.min(1, dv / GS_FULL)), k = Math.abs(t), dark = isDark();
+    const g0 = dark ? [120, 132, 140] : [150, 160, 168];
+    const stops = t < 0 ? (dark ? [[255, 120, 120], [214, 40, 40]] : [[232, 89, 89], [122, 10, 10]]) : (dark ? [[110, 220, 130], [47, 158, 68]] : [[64, 192, 87], [20, 92, 36]]);
+    const lerp = (A, B, u) => A.map((x, i) => Math.round(x + (B[i] - x) * u));
+    const c = k < 0.4 ? lerp(g0, stops[0], k / 0.4) : lerp(stops[0], stops[1], (k - 0.4) / 0.6);
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+  function gsLegend(ctx, x, y) {
+    const wdt = 230, hgt = 8;
+    ctx.font = '600 10px ' + css('--f-mono'); ctx.textBaseline = 'bottom'; ctx.textAlign = 'left';
+    ctx.fillStyle = css('--muted'); ctx.fillText('LEVEL GROUND SPEED VS ' + GS_REF_KT + ' KT REF', x, y - 2);
+    for (let i = 0; i < wdt; i++) { ctx.fillStyle = gsColor(((i / (wdt - 1)) * 2 - 1) * GS_FULL); ctx.fillRect(x + i, y, 1.5, hgt); }
+    ctx.textBaseline = 'top'; ctx.fillStyle = css('--muted');
+    ctx.fillText((GS_REF_KT - 20) + ' kt into wind', x, y + hgt + 2); ctx.textAlign = 'right'; ctx.fillText('downwind ' + (GS_REF_KT + 20) + ' kt', x + wdt, y + hgt + 2);
+  }
 
   // ---------- drawing ----------
   function setup(cv) {
@@ -1306,7 +1336,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
         if (mode === 'calm') { ctx.strokeStyle = css('--muted'); ctx.setLineDash([4, 4]); ctx.lineWidth = 1; alpha = 0.55; }
         else {
           ctx.setLineDash(b.gap ? [2, 3] : []);
-          ctx.strokeStyle = b.gap ? css('--gap') : figColor(b.fi);
+          ctx.strokeStyle = gsColor(gsDelta(a, b));
           ctx.lineWidth = (sel === b.fi ? 3 : 2) * (b.gap ? 0.75 : 1);
           alpha = pass === 0 ? 0.22 : 1;
           if (sel >= 0 && sel !== b.fi) alpha *= 0.35;
@@ -1365,6 +1395,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     if (!R) return;
     if (state.showCalm && C) drawTrack(ctx, C.samples, P, Infinity, 'calm');
     drawTrack(ctx, R.samples, P, T, 'main');
+    gsLegend(ctx, 8, 46);
     finishMarker(ctx, P);
     entryExitOverlay(ctx, P, 'top');
     figMarkers(ctx, P);
@@ -1380,15 +1411,15 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     const m = marginM();
     if (m > 0) { const p = P({ x: -500 + m, y: 500 - m }), q = P({ x: 500 - m, y: -500 + m }); ctx.strokeStyle = css('--warn'); ctx.lineWidth = 1; ctx.setLineDash([3, 4]); ctx.strokeRect(p[0], p[1], q[0] - p[0], q[1] - p[1]); ctx.setLineDash([]); }
     const y = finishY(), a = P({ x: -500, y }), b = P({ x: 500, y });
-    ctx.strokeStyle = css('--ok'); ctx.lineWidth = 1.5; ctx.setLineDash([8, 5]);
+    ctx.strokeStyle = css('--ink'); ctx.lineWidth = 1.5; ctx.setLineDash([8, 5]);
     ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); ctx.setLineDash([]);
-    ctx.font = '600 11px ' + css('--f-display'); ctx.fillStyle = css('--ok'); ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    ctx.font = '600 11px ' + css('--f-display'); ctx.fillStyle = css('--ink'); ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
     ctx.fillText(`FINISH ${state.finishPct}% FROM FRONT`, a[0] + 4, a[1] - 3);
   }
   // entry dive + wing wags and exit wags, drawn so the pilot can read the start
   function entryExitOverlay(ctx, P, view) {
     if (!R) return;
-    const S = R.samples, ok = css('--ok'), ink = css('--ink');
+    const S = R.samples, ok = css('--ink'), ink = css('--ink');
     const seg = ph => S.filter(s => s.phase === ph);
     const ap = seg('approach'), en = seg('entry'), ex = seg('exit'), dp = seg('depart');
     const line = (pts, w, dash) => { if (pts.length < 2) return; ctx.beginPath(); pts.forEach((s, i) => { const p = P(s); i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }); ctx.lineWidth = w; ctx.setLineDash(dash || []); ctx.strokeStyle = ok; ctx.stroke(); ctx.setLineDash([]); };
@@ -1579,8 +1610,8 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     ctx.strokeStyle = css('--ink'); ctx.beginPath(); ctx.moveTo(padL, gnd); ctx.lineTo(w - padR, gnd); ctx.stroke();
     if (rule().dq) { const yd = P({ x: 0, z: rule().dq * FT })[1]; ctx.strokeStyle = css('--bad'); ctx.setLineDash([2, 3]); ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(padL, yd); ctx.lineTo(w - padR, yd); ctx.stroke(); ctx.setLineDash([]);
       ctx.font = '600 10.5px ' + css('--f-display'); ctx.fillStyle = css('--bad'); ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; ctx.fillText(`DISQUALIFICATION ${rule().dq} FT`, padL + 6, yd - 2); }
-    { const yf = P({ x: 0, z: (state.lowFt + state.floorFt) * FT })[1]; ctx.strokeStyle = css('--ok'); ctx.setLineDash([8, 5]); ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(padL, yf); ctx.lineTo(w - padR, yf); ctx.stroke(); ctx.setLineDash([]);
-      ctx.font = '600 11px ' + css('--f-display'); ctx.fillStyle = css('--ok'); ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; ctx.fillText(`LOWEST POINT TARGET · ${state.floorFt} FT ABOVE BOTTOM`, padL + 6, yf - 3); }
+    { const yf = P({ x: 0, z: (state.lowFt + state.floorFt) * FT })[1]; ctx.strokeStyle = css('--ink'); ctx.setLineDash([8, 5]); ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(padL, yf); ctx.lineTo(w - padR, yf); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font = '600 11px ' + css('--f-display'); ctx.fillStyle = css('--ink'); ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; ctx.fillText(`LOWEST POINT TARGET · ${state.floorFt} FT ABOVE BOTTOM`, padL + 6, yf - 3); }
     // altitude ticks
     ctx.font = '11px ' + css('--f-mono'); ctx.fillStyle = css('--muted'); ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
     const zftMax = zmax / FT;

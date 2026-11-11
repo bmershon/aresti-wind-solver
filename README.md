@@ -10,7 +10,7 @@ A single-page planner for placing an aerobatic sequence in the 1,000 m box with 
 - CIVA Section 6 Part 1 (2026) checks: heights, zone penalties, time limit, wind limits, axis directionality
 - "Open in OpenAero" link for the official Forms A/B/C
 
-**Demo status:** aircraft numbers are generic Extra 330SC assumptions until replaced with measured (e.g. AcroWorx) performance. Treat results as planning aids, not flight guidance.
+**Demo status:** the default aircraft is a Sukhoi Su-26 with performance numbers estimated by the pilot from memory (top speed 175 kt, stall 60 kt, 6 g loops, pilot g limits +9.5 / −6), until replaced with measured AcroWorx performance. Treat results as planning aids, not flight guidance.
 
 ## Deploy to GitHub Pages
 
