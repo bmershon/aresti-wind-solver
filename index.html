@@ -1502,7 +1502,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     // spinner dot at the nose
     const nz = S(W(2.6, 0, 0)); ctx.fillStyle = ink; ctx.beginPath(); ctx.arc(nz[0], nz[1], 1.6, 0, Math.PI * 2); ctx.fill();
   }
-  const INPUT_TEXT = { pull: 'PULL', push: 'PUSH', roll: 'ROLL', pause: 'HOLD', snap: 'SNAP', spin: 'SPIN', pivot: 'PIVOT', tailslide: 'SLIDE', 'rolling turn': 'ROLLING TURN', turn: 'TURN', slow: 'POWER OFF', wags: 'WING WAGS', line: '' };
+  const INPUT_TEXT = { pull: 'PULL', push: 'PUSH', roll: 'ROLL', pause: 'HOLD', snap: 'SNAP', spin: 'SPIN', pivot: 'PIVOT', tailslide: 'SLIDE', 'rolling turn': 'ROLLING TURN', turn: 'TURN', slow: 'SLOW', wags: 'WING WAGS', line: '' };
   function plane(ctx, P, top) {
     const s = R.samples[idxAt(T)];
     const p = P(s);
@@ -1612,7 +1612,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
 
 
 
-  // ---------- pilot notes: g changes, power, energy ----------
+  // ---------- pilot notes: g changes and energy ----------
   function windAtZ(z) {
     const L = windLevels(); if (!L.length) return [0, 0];
     if (z <= L[0].z) return [L[0].wx, L[0].wy];
@@ -1638,6 +1638,8 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     }
     return gs;
   }
+  // Power cues are hidden until the model is calibrated with measured (AcroWorx) data.
+  const SHOW_POWER = false;
   function figNotes(i) {
     if (!R || !R.figs[i] || R.figs[i].error) return [];
     const calmG = arcGroups(C, i); let gi = 0;
@@ -1647,7 +1649,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     {
       const gp = []; for (let k = f.startIdx - 1; k >= 0 && S[k].fi === i && S[k].gap; k--) gp.unshift(S[k]);
       let k0 = f.startIdx; while (S[k0] && S[k0].fi === i && S[k0].gap) { gp.push(S[k0]); k0++; }
-      if (gp.length > 3) {
+      if (SHOW_POWER && gp.length > 3) {
         const v0 = Math.round(gp[0].v / KT), v1 = Math.round(gp[gp.length - 1].v / KT), tgt = state.energy === 'managed' ? v1 : Math.round((state.figOpts[i] && state.figOpts[i].vEntry) || state.ac.ventry);
         if (gp.some(q => q.brake) || v1 < v0 - 3) out.push({ txt: `Reduce power on the line before: ${v0} → ${v1} kt`, cls: '', marks: [] });
         else if (v1 > v0 + 3) out.push({ txt: `${state.energy === 'managed' ? 'Add power' : 'Full power'} on the line before: ${v0} → ${v1} kt${v1 < tgt - 4 ? ` (${tgt - v1} kt short of ${tgt} — lengthen the line or accept a smaller figure)` : ''}`, cls: v1 < tgt - 4 ? 'warn' : '', marks: [] });
@@ -1707,8 +1709,8 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
         out.push({ txt: `${s.rl || 'Turn'}: hold ${Math.max(...pts.slice(k, e + 1).map(q => q.n)).toFixed(1)} g and a steady rate (${s.el === 'rolling turn' ? state.ac.rtRate + '°/s' : 'about 70° bank'})`, cls: '', marks: [{ fr: fr(s), lab: 'turn' }] });
       }
       if (s.el === 'pivot' && (k === 0 || pts[k - 1].el !== 'pivot')) out.push({ txt: `Rudder pivot at about ${Math.round(pts[Math.max(0, k - 1)].v / KT)} kt`, cls: '', marks: [{ fr: fr(s), lab: 'pivot' }] });
-      if (s.el === 'slow' && (k === 0 || pts[k - 1].el !== 'slow')) out.push({ txt: `Power idle, slow to ${Math.round(state.ac.vs)} kt for the spin entry`, cls: '', marks: [{ fr: fr(s), lab: 'idle' }] });
-      if (k > 0 && s.pw !== pts[k - 1].pw && s.el !== 'slow' && s.el !== 'spin') {
+      if (s.el === 'slow' && (k === 0 || pts[k - 1].el !== 'slow')) out.push({ txt: `Slow to about ${Math.round(state.ac.vs)} kt for the spin entry`, cls: '', marks: [{ fr: fr(s), lab: 'slow' }] });
+      if (SHOW_POWER && k > 0 && s.pw !== pts[k - 1].pw && s.el !== 'slow' && s.el !== 'spin') {
         out.push({ txt: s.pw ? `Full power on the ${attName(s.pz)} line (${Math.round(s.v / KT)} kt)` : `Power to idle on the ${attName(s.pz)} line at ${Math.round(s.v / KT)} kt`, cls: '', marks: [{ fr: fr(s), lab: s.pw ? 'full' : 'idle' }] });
       }
       k++;
