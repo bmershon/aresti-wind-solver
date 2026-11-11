@@ -1151,8 +1151,8 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     ['rtRate', 'Rolling turn °/s', 30], ['brake', 'Idle + airbrake decel (g)', 0.6], ['gLimPos', 'G limit positive', 10], ['gLimNeg', 'G limit negative', 10], ['lineUnit', 'Line unit m', 12], ['kind', 'Induced drag factor', 0.08],
   ];
   const PRESETS = {
-    // Su-26: pilot estimates from memory (Brooks, Nov 2026) pending AcroWorx data; g limits are the pilot's, inside the +11/-9 airframe limits
-    'Sukhoi Su-26': { ventry: 160, vmax: 175, vne: 243, vSeqMax: 175, vs: 60, rollRate: 360, snapRate: 450, loopG: 6, pushLoopG: 4.5, cornerG: 7, pushCornerG: 5, tw: 0.5, vPivotKt: 35, pivotTime: 2.5, hesitation: 0.6, hesitation8: 0.4, rtRate: 30, spinTurnTime: 1.4, spinFt: 380, brake: 0.45, gLimPos: 9.5, gLimNeg: 6 },
+    // Su-26: pilot estimates from memory (Brooks, Nov 2026) pending AcroWorx data; 800 ft loops from 320 km/h (173 kt) max level speed (~7.5 g); a 6 g loop exits at about entry speed, an 8 g loop loses ~15 kt; g limits are the pilot's, inside the +11/-9 airframe limits
+    'Sukhoi Su-26': { ventry: 173, vmax: 173, vne: 243, vSeqMax: 173, vs: 60, rollRate: 360, snapRate: 450, loopG: 7.5, kind: 0.065, pushLoopG: 4.5, cornerG: 7, pushCornerG: 5, tw: 0.5, vPivotKt: 35, pivotTime: 2.5, hesitation: 0.6, hesitation8: 0.4, rtRate: 30, spinTurnTime: 1.4, spinFt: 380, brake: 0.45, gLimPos: 9.5, gLimNeg: 6 },
     'Extra 330SC / LX': { ventry: 160, vmax: 210, vne: 220, vs: 55, rollRate: 400, snapRate: 500, loopG: 7, pushLoopG: 4.5, tw: 0.32 },
     'Extra 300L': { ventry: 150, vmax: 185, vne: 219, vs: 55, rollRate: 340, snapRate: 430, loopG: 5, pushLoopG: 4, tw: 0.27 },
     'Edge 540': { ventry: 165, vmax: 215, vne: 230, vs: 55, rollRate: 420, snapRate: 520, loopG: 5.5, pushLoopG: 4.5, tw: 0.34 },
@@ -1189,7 +1189,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   if (!state.crabV1) { state.crab = false; state.showCalm = false; state.crabV1 = true; }
   if (!state.autoV1) { state.autoSolve = true; state.autoV1 = true; }
   if (!state.demoV3) { state.energy = 'managed'; state.demoV2 = state.demoV3 = true; state.preset = 'Extra 330SC / LX'; [...FIELDS, ...MORE].forEach(([k, , v]) => state.ac[k] = v); Object.assign(state.ac, PRESETS[state.preset]); }
-  if (!state.suV1) { state.suV1 = true; state.preset = 'Sukhoi Su-26'; [...FIELDS, ...MORE].forEach(([k, , v]) => state.ac[k] = v); Object.assign(state.ac, PRESETS[state.preset]); }
+  if (!state.suV3) { state.suV1 = state.suV2 = state.suV3 = true; state.preset = 'Sukhoi Su-26'; [...FIELDS, ...MORE].forEach(([k, , v]) => state.ac[k] = v); Object.assign(state.ac, PRESETS[state.preset]); }
   if (state.seq === '44c2 m1- -h2f n(24)24- -5is;8ibb 6m 6fic2- -a3;34 8pb3 m44;24 3jo3') state.seq = SAMPLE;
   function save() { try { localStorage.setItem('bdp-v1', JSON.stringify(state)); } catch (e) { } }
 
