@@ -153,7 +153,7 @@ details[open] summary{margin-bottom:8px}
       <input type="range" id="finPct" min="0" max="50" step="1" value="20" style="width:100%">
       <div class="grid2" style="margin-top:6px">
         <div><label for="marginPct">Stay inside edges by %</label><input type="number" id="marginPct" min="0" max="20" step="1" value="5"></div>
-        <div><label for="diveFt">Entry dive with wags ft</label><input type="number" id="diveFt" min="0" step="50" value="300"></div>
+        <div><label for="diveDeg">Entry dive angle °</label><input type="number" id="diveDeg" min="0" max="70" step="5" value="45"></div>
         <div><label for="floorFt">Lowest point above box bottom ft</label><input type="number" id="floorFt" min="0" step="50" value="300"></div>
         <div style="justify-content:flex-end"><button id="fitAlt">Set start altitude</button></div>
         <div style="grid-column:1/-1"><label for="comfortM">Keep figures within ± m of center (when possible)</label><input type="number" id="comfortM" min="100" max="450" step="25" value="300"></div>
@@ -573,7 +573,8 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
       const v = Math.max(st.v, 3);
       const thr = throttle === undefined ? autoThrottle() : throttle;
       lastThr = thr;
-      return g * (thr * (1 - (v / ac.vmax) ** 2)) - g * st.f[2] - g * ac.kind * n * n * (ac.vs / v) ** 2;
+      const pw = thr >= 0 ? thr * (1 - (v / ac.vmax) ** 2) : thr * Math.max(0.15, (v / ac.ventry) ** 2); // idle/airbrake drag scales with v²
+      return g * pw - g * st.f[2] - g * ac.kind * n * n * (ac.vs / v) ** 2;
     }
     function step(n, opt = {}) {
       const w = sim.wind(st.p[2]);
@@ -735,17 +736,31 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
       st.f = norm(rotAbout(f0, wN, sg * total)); st.u = norm(cross(wN, st.f));
     }
     function wags(o) {
-      // o.n wing rocks over o.period s each; optional dive of o.dz metres (descending to the start altitude)
+      // o.n wing rocks over o.period s each.
+      // o.gamma: steep dive-in. Push over to o.gamma below the horizon, rock the wings in the dive, pull out level.
+      // Speed is held with airbrake and power through the dive (pilot's technique); power is set after the 3rd wag.
+      // Without o.gamma: optional shallow dive of o.dz metres (older behaviour).
       const T = o.n * o.period, steps = Math.round(T / dt);
       const hf = norm([st.f[0], st.f[1], 0]);
-      const gam = o.dz > 0 ? Math.asin(Math.min(0.9, o.dz / Math.max(1, st.v * T))) : 0; // path length v·T drops exactly dz
-      st.f = norm([hf[0] * Math.cos(gam), hf[1] * Math.cos(gam), -Math.sin(gam)]);
-      const up0 = norm(cross(cross(st.f, [0, 0, 1]), st.f));
-      let phi = 0;
+      const setPitch = th => { st.f = norm([hf[0] * Math.cos(th), hf[1] * Math.cos(th), Math.sin(th)]); st.u = norm(cross(cross(st.f, [0, 0, 1]), st.f)); };
+      const steep = o.gamma > 0;
+      const gam = steep ? o.gamma : o.dz > 0 ? Math.asin(Math.min(0.9, o.dz / Math.max(1, st.v * T))) : 0; // path length v·T drops exactly dz
+      if (steep) {
+        // push over at o.pushG (e.g. -1.5 g): pitch rate = g·(cosθ − n)/v
+        let th = 0;
+        while (th > -gam) { th = Math.max(-gam, th - g * (Math.cos(th) - (o.pushG || -1.5)) / st.v * dt); setPitch(th); step(o.pushG || -1.5, { el: 'entry', fixV: true, brake: true, rid: -1 }); }
+      }
+      setPitch(-gam);
+      const up0 = st.u.slice();
       for (let k = 1; k <= steps; k++) {
         const nphi = o.bank * D2R * Math.sin(2 * Math.PI * k * dt / o.period);
-        st.u = norm(rotAbout(up0, st.f, nphi)); phi = nphi;
-        step(1, { el: 'wags', fixV: true, rl: o.dz > 0 ? 'diving wing wags' : 'wing wags', rid: -1 });
+        st.u = norm(rotAbout(up0, st.f, nphi));
+        step(Math.cos(gam), { el: 'wags', fixV: true, brake: steep, rl: gam > 0 ? 'diving wing wags' : 'wing wags', rid: -1 });
+      }
+      if (steep) {
+        // pull out level at o.pullG (e.g. 4 g): pitch rate = g·(n − cosθ)/v; set power for figure 1
+        let th = -gam;
+        while (th < 0) { th = Math.min(0, th + g * ((o.pullG || 4) - Math.cos(th)) / st.v * dt); setPitch(th); step(o.pullG || 4, { el: 'entry', fixV: true, rid: -1 }); }
       }
       st.f = hf; st.u = [0, 0, 1];
     }
@@ -753,7 +768,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
       let guard = 0;
       if (st.f[2] < 0.8) return;
       recovering = true; // deliberate slow-down into a pivot or tailslide
-      while (st.v > vt && guard++ < 3000) step(0, { el: 'line' });
+      while (st.v > vt && guard++ < 3000) step(0, { el: 'line', throttle: -(ac.brake || 0.6) });
     }
     function hammer() {
       climbUntil(ac.vPivot);
@@ -801,11 +816,17 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
       if (o.op === 'line') {
         const nx1 = ops[ops.indexOf(o) + 1], toStall = nx1 && (nx1.op === 'hammer' || nx1.op === 'tail');
         if (o.exact) line(o.u * ac.lineUnit, null, o.vTarget);
-        else if (st.f[2] > 0.5 && !toStall) {
-          // pilot shortens an up line rather than run out of airspeed
+        else if (st.f[2] > 0.5) {
+          // up lines: full power only while the energy is needed. If the line would still arrive with more than
+          // the speed needed at the top (pivot speed, or enough to pull over), the pilot pulls power to idle.
           const d = o.u * U * Math.min(1.3, Math.max(0.35, st.v / ac.ventry)); let s0 = 0;
-          while (s0 < d && st.v > ac.vs * 1.05) { s0 += st.v * dt; step(loadLine(), { el: 'line' }); }
-          if (s0 < d * 0.98) cutShort = Math.round(st.v / KT);
+          const vTop = toStall ? ac.vPivot : ac.vs * 1.6, idle = -(ac.brake || 0.6);
+          while (s0 < d && st.v > (toStall ? ac.vPivot : ac.vs * 1.05)) {
+            const dec = g * st.f[2] + g * (ac.brake || 0.6) * Math.max(0.15, (st.v / ac.ventry) ** 2);
+            const thr = st.v * st.v - 2 * dec * (d - s0) > vTop * vTop ? idle : ac.tw;
+            s0 += st.v * dt; step(loadLine(), { el: 'line', throttle: thr });
+          }
+          if (!toStall && s0 < d * 0.98) cutShort = Math.round(st.v / KT);
         } else line(o.u * U * Math.min(1.3, Math.max(0.35, st.v / ac.ventry)));
         const nxt = ops[ops.indexOf(o) + 1];
         if (st.f[2] < -0.6 && nxt && nxt.op === 'arc' && ops.indexOf(o) >= ops.length - 3) { let gd = 0; const vNeed = (opts.vNext || ac.ventry) * 0.95; while (st.v < vNeed && gd++ < 800) step(loadLine(), { el: 'line', build: true }); }
@@ -891,22 +912,23 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     const vt1 = o0.vEntry ? o0.vEntry * KT : ac.ventry;
     let st = { p: [sx, sy, env.startAlt], a: [sx, sy, env.startAlt], f, u: [0, 0, 1], v: vt1, t: 0 };
     const samples = [], figs = [];
-    let boxStart = 0;
+    let boxStart = 0, entryDive = 0, entryInfo = null;
     if (env.wags) {
-      const T = (env.wagCount || 3) * (env.wagPeriod || 1.1), run = vt1 * T;
-      const d0 = [sx - f[0] * run, sy - f[1] * run, env.startAlt + dz];
-      const back = 250;
-      const st0 = Object.assign(sim.clone(st), { p: [d0[0] - f[0] * back, d0[1] - f[1] * back, d0[2]] });
-      st0.a = st0.p.slice(); st0.v = vt1;
+      const steep = env.diveDeg > 0;
       const calmSim = Object.assign(Object.create(Sim.prototype), sim, { wind: () => [0, 0] });
+      const back = 250;
+      const st0 = Object.assign(sim.clone(st), { p: [0, 0, 0], a: [0, 0, 0], v: vt1, t: 0 });
       const ap = runFigure(calmSim, st0, [{ op: 'line', u: back / ac.lineUnit, exact: true }], [], {}, true);
-      ap.out.forEach(q => { q.fi = -1; q.phase = 'approach'; q.gap = true; samples.push(q); });
-      const sw = Object.assign(sim.clone(st), { p: d0.slice(), a: d0.slice(), v: vt1, t: ap.st.t });
-      // dive with wing wags, arriving level at the start altitude at the fig 1 entry speed
-      const wg = runFigure(calmSim, sw, [{ op: 'wags', n: env.wagCount || 3, period: env.wagPeriod || 1.1, bank: 45, dz }], [], {}, true);
-      wg.out.forEach(q => { q.fi = -1; q.phase = 'entry'; samples.push(q); });
+      const sw = Object.assign(sim.clone(ap.st), { t: ap.st.t, v: vt1 });
+      const wg = runFigure(calmSim, sw, [{ op: 'wags', n: env.wagCount || 3, period: env.wagPeriod || 1.1, bank: 45, dz, gamma: steep ? env.diveDeg * D2R : 0, pushG: -1.5, pullG: 4 }], [], {}, true);
+      const sh = [sx - wg.st.p[0], sy - wg.st.p[1], env.startAlt - wg.st.p[2]];
+      const mv = q => { q.x += sh[0]; q.y += sh[1]; q.z += sh[2]; if (q.ax !== undefined) { q.ax += sh[0]; q.ay += sh[1]; q.az += sh[2]; } return q; };
+      ap.out.forEach(q => { mv(q); q.fi = -1; q.phase = 'approach'; q.gap = true; samples.push(q); });
+      wg.out.forEach(q => { mv(q); q.fi = -1; q.phase = 'entry'; samples.push(q); });
+      entryDive = -wg.st.p[2]; // height lost from the approach to level-off
+      { const ws = wg.out.filter(q => q.el === 'wags'); entryInfo = { topZ: env.startAlt + entryDive, wagZ0: ws.length ? ws[0].z : env.startAlt, wagZ1: ws.length ? ws[ws.length - 1].z : env.startAlt, deg: steep ? env.diveDeg : 0 }; }
       st.t = wg.st.t; st.v = vt1;
-      st.p = [wg.st.p[0], wg.st.p[1], env.startAlt]; st.a = st.p.slice();
+      st.p = [sx, sy, env.startAlt]; st.a = st.p.slice();
       const lastW = samples[samples.length - 1]; if (lastW) lastW.z = env.startAlt;
       boxStart = samples.length;
     }
@@ -964,6 +986,8 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
         return { gapOut, entry: s1, r, vars, vi: v2, gapEff: gap, autoScale };
       }
       let gap = o.gap !== undefined && o.gap !== null && o.gap !== '' ? +o.gap : null;
+      const gapCap = i === 0 && env.wags && env.maxLevelS ? env.maxLevelS * st.v : Infinity; // level no more than N s before figure 1
+      if (gap !== null) gap = Math.min(gap, gapCap);
       if (gap === null) {
         if (env.autoGap) {
           const fast = Object.assign(Object.create(Sim.prototype), sim, { dt: 0.12 });
@@ -973,7 +997,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
           const factors = tradeMode ? [1, 0.93, 0.86, 0.8] : [1];
           for (const fct of factors) {
             if (fct < 1 && bestOver < 1) break; // only enter slower when the figure would not fit
-            for (let gp = 0; gp <= 900; gp += (env.gapStep || 20)) {
+            for (let gp = 0; gp <= Math.min(900, gapCap); gp += (env.gapStep || 20)) {
               const t = doFig(fast, st, gp, o.variant || 0, false, vt0 * fct);
               const R = t.r;
               const rr = runFigure(fast, t.entry, ops, t.vars[t.vi].signs, o, true).out;
@@ -1012,6 +1036,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
           }
         } else gap = env.defaultGap;
       }
+      gap = Math.min(gap, gapCap);
       const D = doFig(sim, st, gap, o.variant || 0, true, vtPick);
       D.gapOut.forEach(q => { q.fi = i; q.gap = true; samples.push(q); });
       const entrySt = D.entry, r = D.r, vars = D.vars, vi = D.vi; gap = D.gapEff; const autoScale = D.autoScale;
@@ -1037,7 +1062,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
       dp.out.forEach(q => { q.fi = -2; q.phase = 'depart'; q.gap = true; samples.push(q); });
       seqEnd = ex.st; st = dp.st;
     }
-    return { samples, figs, end: st, seqEnd, boxStart };
+    return { samples, figs, end: st, seqEnd, boxStart, entryInfo };
   }
 
   // ---------- Aresti numbers -> OpenAero string (for PDF import) ----------
@@ -1178,7 +1203,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   let state = {
     seq: SAMPLE, ac: {}, preset: 'Sukhoi Su-26', wind: DEFAULT_WIND.map(r => r.slice()), altRef: 'msl', elev: 0,
     rules: 'CIVA Advanced (power)', lowFt: 656, highFt: 3609, facing: 0, jdist: 150, startAlt: 2500, energy: 'managed',
-    autoGap: true, crab: false, crabAll: false, roundLoops: true, showWind: true, windFollow: true, windLevelFt: 3000, showCalm: false, entry: '', figOpts: [], form: 'B', fview: 'aresti', floorFt: 300, comfortM: 300, finishPct: 20, startX: null, startY: null, marginPct: 5, diveFt: 300, autoSolve: true, loopPlay: true,
+    autoGap: true, crab: false, crabAll: false, roundLoops: true, showWind: true, windFollow: false, windMode: 'max', windLevelFt: 3000, showCalm: false, entry: '', figOpts: [], form: 'B', fview: 'aresti', floorFt: 300, comfortM: 300, finishPct: 20, startX: null, startY: null, marginPct: 5, diveFt: 300, diveDeg: 45, autoSolve: true, loopPlay: true,
   };
   [...FIELDS, ...MORE].forEach(([k, , v]) => state.ac[k] = v);
   Object.assign(state.ac, PRESETS[state.preset]);
@@ -1187,9 +1212,11 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   if (state.ac.hesitation === 0.25) state.ac.hesitation = 0.5; // old default
   if (!RULES[state.rules]) state.rules = 'CIVA Advanced (power)';
   if (!/^(level|carry|managed)$/.test(state.energy)) state.energy = 'managed'; // height is only changed by flying, never on a level line
+  if (!state.windV1) { state.windMode = 'max'; state.windV1 = true; }
   if (!state.crabV1) { state.crab = false; state.showCalm = false; state.crabV1 = true; }
   if (!state.autoV1) { state.autoSolve = true; state.autoV1 = true; }
   if (!state.demoV3) { state.energy = 'managed'; state.demoV2 = state.demoV3 = true; state.preset = 'Extra 330SC / LX'; [...FIELDS, ...MORE].forEach(([k, , v]) => state.ac[k] = v); Object.assign(state.ac, PRESETS[state.preset]); }
+  if (!state.diveV1) { state.diveDeg = 45; state.diveV1 = true; }
   if (!state.suV3) { state.suV1 = state.suV2 = state.suV3 = true; state.preset = 'Sukhoi Su-26'; [...FIELDS, ...MORE].forEach(([k, , v]) => state.ac[k] = v); Object.assign(state.ac, PRESETS[state.preset]); }
   if (state.seq === '44c2 m1- -h2f n(24)24- -5is;8ibb 6m 6fic2- -a3;34 8pb3 m44;24 3jo3') state.seq = SAMPLE;
   function save() { try { localStorage.setItem('bdp-v1', JSON.stringify(state)); } catch (e) { } }
@@ -1219,7 +1246,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     ['altRef', 'elev', 'lowFt', 'highFt', 'facing', 'jdist', 'startAlt', 'energy', 'entry'].forEach(k => $(k).value = state[k]);
     ['autoGap', 'crab', 'crabAll', 'roundLoops', 'showCalm', 'showWind'].forEach(k => $(k).checked = state[k] !== false && !!state[k]);
     $('finPct').value = state.finishPct; $('startXIn').value = state.startX ?? ''; $('startYIn').value = state.startY ?? ''; $('autoSolve').checked = !!state.autoSolve;
-    $('marginPct').value = state.marginPct; $('diveFt').value = state.diveFt; $('floorFt').value = state.floorFt; $('comfortM').value = state.comfortM;
+    $('marginPct').value = state.marginPct; $('diveDeg').value = state.diveDeg; $('floorFt').value = state.floorFt; $('comfortM').value = state.comfortM;
     windRowsHtml();
   }
   fillControls();
@@ -1254,7 +1281,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     const env = {
       windLevels: windLevels(), startAlt: state.startAlt * FT, defaultGap: 60, energyMode: state.energy,
       autoGap: state.autoGap, boxHalf: 500, margin: state.marginPct * 10, crab: state.crab, crabAll: state.crabAll, roundLoops: state.roundLoops !== false, startX: state.startX, startY: state.startY, civa: isCiva(), comfortHalf: state.comfortM,
-      wags: true, diveFt: state.diveFt,
+      wags: true, diveFt: state.diveFt, diveDeg: state.diveDeg, maxLevelS: 3,
     };
     const ac = acModel();
     const opts = parsed.items.map((_, i) => Object.assign({}, state.figOpts[i] || {}));
@@ -1454,7 +1481,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     const dr = S.filter(s => s.fi === 0 && s.gap);
     line(dr, 3.2, [2, 3]);
     if (en.length) {
-      tag(en[0], view === 'top' ? `DIVE IN · WAGS · ${Math.round(state.startAlt + state.diveFt).toLocaleString()} ft` : `${Math.round(state.startAlt + state.diveFt).toLocaleString()} ft · wags`, -14);
+      { const top = R.entryInfo ? ftUp(R.entryInfo.topZ) : Math.round(state.startAlt + state.diveFt), deg = R.entryInfo && R.entryInfo.deg ? ` · ${Math.round(R.entryInfo.deg)}° DIVE` : ''; tag(en[0], view === 'top' ? `DIVE IN · WAGS · ${top.toLocaleString()} ft` : `${top.toLocaleString()} ft · wags`, -14); }
       const lv = en[en.length - 1];
       tag(lv, `LEVEL ${Math.round(state.startAlt).toLocaleString()} ft · ${Math.round(lv.v / KT)} kt`, view === 'top' ? 16 : 16);
       const f1 = R.figs[0] && R.figs[0].entry;
@@ -1672,7 +1699,9 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   }
   // Power cues are hidden until the model is calibrated with measured (AcroWorx) data.
   const SHOW_POWER = false;
+  const SHOW_NOTES = false; // figure notes hidden (pilot request)
   function figNotes(i) {
+    if (!SHOW_NOTES) return [];
     if (!R || !R.figs[i] || R.figs[i].error) return [];
     const calmG = arcGroups(C, i); let gi = 0;
     const f = R.figs[i], S = R.samples, out = [];
@@ -1687,11 +1716,11 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
         else if (v1 > v0 + 3) out.push({ txt: `${state.energy === 'managed' ? 'Add power' : 'Full power'} on the line before: ${v0} → ${v1} kt${v1 < tgt - 4 ? ` (${tgt - v1} kt short of ${tgt} — lengthen the line or accept a smaller figure)` : ''}`, cls: v1 < tgt - 4 ? 'warn' : '', marks: [] });
       }
     }
-    if (f.autoScale && f.autoScale < 1) out.push({ txt: `Flown at ${Math.round(f.autoScale * 100)}% size: not enough energy for full size at ${Math.round(f.entry.v / KT)} kt`, cls: 'warn', marks: [] });
-    if (f.cutShort) out.push({ txt: `Up line cut short at ${f.cutShort} kt — not enough energy; enter faster or fly smaller`, cls: 'warn', marks: [] });
-    if (f.stallMargin < 0.7) out.push({ txt: `Speed falls to ${Math.round(f.minVfly / KT)} kt — the wing stalls at this g; this figure needs more entry speed`, cls: 'bad', marks: [] });
-    { const b = pts.filter(q => q.build); if (b.length > 3) out.push({ txt: `Hold the downline to build ${Math.round(b[b.length - 1].v / KT)} kt for the next figure`, cls: '', marks: [] }); }
-    if (f.slowEntry) out.push({ txt: `Enter at ${f.slowEntry} kt instead of ${Math.round(state.ac.ventry)} kt so the figure fits the box`, cls: 'warn', marks: [] });
+    if (f.autoScale && f.autoScale < 1) out.push({ txt: `Flown ${Math.round(f.autoScale * 100)}% size (energy at ${Math.round(f.entry.v / KT)} kt)`, cls: 'warn', marks: [] });
+    if (f.cutShort) out.push({ txt: `Upline short: out of energy at ${f.cutShort} kt`, cls: 'warn', marks: [] });
+    if (f.stallMargin < 0.7) out.push({ txt: `${Math.round(f.minVfly / KT)} kt: stalls at this g, needs more entry speed`, cls: 'bad', marks: [] });
+    { const b = pts.filter(q => q.build); if (b.length > 3) out.push({ txt: `Downline to ${Math.round(b[b.length - 1].v / KT)} kt for the next figure`, cls: '', marks: [] }); }
+    if (f.slowEntry) out.push({ txt: `Enter ${f.slowEntry} kt (box fit)`, cls: 'warn', marks: [] });
     const T0 = pts[0].t, T1 = pts[pts.length - 1].t, fr = s => (s.t - T0) / Math.max(0.01, T1 - T0);
     const gp = +state.ac.gLimPos || 10, gn = +state.ac.gLimNeg || 10;
     let k = 0;
@@ -1709,15 +1738,15 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
         const G = q => (q.n < 0 ? '−' : '') + Math.abs(q.n).toFixed(1);
         const big = turned > 130;
         let txt;
-        if (!big) txt = `${verb} ${G(hi)} g to ${attName(g[g.length - 1].pz)}`;
+        if (!big) txt = `${verb} ${G(hi)} g`;
         else {
-          txt = `${verb} ${G(g[0])} g (${Math.round(turned / 5) * 5}° looping)`;
-          if (mag(lo) < n0 - 0.8 && g.indexOf(lo) < g.length * 0.85) txt += `, ease to ${G(lo)} g over the top`;
+          txt = `${verb} ${G(g[0])}`;
+          if (mag(lo) < n0 - 0.8 && g.indexOf(lo) < g.length * 0.85) txt += ` → ${G(lo)} top`;
           if (mag(hi) > n0 + 0.8) {
             const wv = windAtZ(hi.z), into = hi.f[0] * wv[0] + hi.f[1] * wv[1] < -0.5;
-            txt += `, build to ${G(hi)} g${into && state.roundLoops !== false ? ' on the into-wind side' : ''}`;
+            txt += ` → ${G(hi)}${into && state.roundLoops !== false ? ' into wind' : ''}`;
           }
-          txt += `, finish ${G(g[g.length - 1])} g to ${attName(g[g.length - 1].pz)}`;
+          txt += ` → ${G(g[g.length - 1])} g`;
         }
         // wind compensation vs the same looping part in still air
         const cg = calmG[gi++];
@@ -1727,21 +1756,21 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
           const dHi = mag(hi) - cHi, dLo = mag(lo) - cLo;
           const sg2 = v => (v > 0 ? '+' : '−') + Math.abs(v).toFixed(1);
           const parts = [];
-          if (Math.abs(dHi) >= 0.3) parts.push(`${sg2(dHi)} g at the peak`);
-          if (Math.abs(dLo) >= 0.3) parts.push(`${sg2(dLo)} g over the top`);
-          if (parts.length) txt += `. Wind correction vs still air: ${parts.join(', ')}`;
+          if (Math.abs(dHi) >= 0.3) parts.push(`${sg2(dHi)} g peak`);
+          if (Math.abs(dLo) >= 0.3) parts.push(`${sg2(dLo)} g top`);
+          if (parts.length) txt += ` · wind ${parts.join(', ')}`;
         }
         const cls = (mag(hi) > (push ? gn : gp)) ? 'bad' : '';
-        out.push({ txt: txt + (cls ? ` — over the ${push ? '−' : '+'}${push ? gn : gp} g limit, enter slower` : ''), cls, marks: [{ fr: fr(g[0]), lab: `${G(g[0])}g` }].concat(big && mag(lo) < n0 - 0.8 ? [{ fr: fr(lo), lab: `${G(lo)}g` }] : []).concat(mag(hi) > n0 + 0.8 ? [{ fr: fr(hi), lab: `${G(hi)}g` }] : []) });
-        if (g.filter(q => q.short).length > g.length * 0.3 && !out.some(n => n.round)) out.push({ txt: 'Low energy over the top: this looping part may not stay perfectly round', cls: 'warn', marks: [], round: true });
+        out.push({ txt: txt + (cls ? ` · over ${push ? '−' : '+'}${push ? gn : gp} g` : ''), cls, marks: [{ fr: fr(g[0]), lab: `${G(g[0])}g` }].concat(big && mag(lo) < n0 - 0.8 ? [{ fr: fr(lo), lab: `${G(lo)}g` }] : []).concat(mag(hi) > n0 + 0.8 ? [{ fr: fr(hi), lab: `${G(hi)}g` }] : []) });
+        if (g.filter(q => q.short).length > g.length * 0.3 && !out.some(n => n.round)) out.push({ txt: 'Low energy over the top', cls: 'warn', marks: [], round: true });
         k = e + 1; continue;
       }
       if ((s.el === 'rolling turn' || s.el === 'turn') && (k === 0 || pts[k - 1].el !== s.el)) {
         let e = k; while (e + 1 < pts.length && pts[e + 1].el === s.el) e++;
-        out.push({ txt: `${s.rl || 'Turn'}: hold ${Math.max(...pts.slice(k, e + 1).map(q => q.n)).toFixed(1)} g and a steady rate (${s.el === 'rolling turn' ? state.ac.rtRate + '°/s' : 'about 70° bank'})`, cls: '', marks: [{ fr: fr(s), lab: 'turn' }] });
+        out.push({ txt: `${Math.max(...pts.slice(k, e + 1).map(q => q.n)).toFixed(1)} g · ${s.el === 'rolling turn' ? state.ac.rtRate + '°/s' : '70° bank'}`, cls: '', marks: [{ fr: fr(s), lab: 'turn' }] });
       }
-      if (s.el === 'pivot' && (k === 0 || pts[k - 1].el !== 'pivot')) out.push({ txt: `Rudder pivot at about ${Math.round(pts[Math.max(0, k - 1)].v / KT)} kt`, cls: '', marks: [{ fr: fr(s), lab: 'pivot' }] });
-      if (s.el === 'slow' && (k === 0 || pts[k - 1].el !== 'slow')) out.push({ txt: `Slow to about ${Math.round(state.ac.vs)} kt for the spin entry`, cls: '', marks: [{ fr: fr(s), lab: 'slow' }] });
+      if (s.el === 'pivot' && (k === 0 || pts[k - 1].el !== 'pivot')) out.push({ txt: `Pivot ${Math.round(pts[Math.max(0, k - 1)].v / KT)} kt`, cls: '', marks: [{ fr: fr(s), lab: 'pivot' }] });
+      if (s.el === 'slow' && (k === 0 || pts[k - 1].el !== 'slow')) out.push({ txt: `Spin entry ${Math.round(state.ac.vs)} kt`, cls: '', marks: [{ fr: fr(s), lab: 'slow' }] });
       if (SHOW_POWER && k > 0 && s.pw !== pts[k - 1].pw && s.el !== 'slow' && s.el !== 'spin') {
         out.push({ txt: s.pw ? `Full power on the ${attName(s.pz)} line (${Math.round(s.v / KT)} kt)` : `Power to idle on the ${attName(s.pz)} line at ${Math.round(s.v / KT)} kt`, cls: '', marks: [{ fr: fr(s), lab: s.pw ? 'full' : 'idle' }] });
       }
@@ -2032,7 +2061,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   const marginM = () => state.marginPct * 10;
   const finishY = () => -500 + 10 * state.finishPct;
   function boxEnv(extra) {
-    return Object.assign({ windLevels: windLevels(), startAlt: state.startAlt * FT, defaultGap: 60, energyMode: state.energy, autoGap: state.autoGap, boxHalf: 500, margin: marginM(), crab: state.crab, crabAll: state.crabAll, roundLoops: state.roundLoops !== false, startX: state.startX, startY: state.startY, civa: isCiva(), comfortHalf: state.comfortM, wags: true, diveFt: state.diveFt, gapStep: 60 }, extra || {});
+    return Object.assign({ windLevels: windLevels(), startAlt: state.startAlt * FT, defaultGap: 60, energyMode: state.energy, autoGap: state.autoGap, boxHalf: 500, margin: marginM(), crab: state.crab, crabAll: state.crabAll, roundLoops: state.roundLoops !== false, startX: state.startX, startY: state.startY, civa: isCiva(), comfortHalf: state.comfortM, wags: true, diveFt: state.diveFt, diveDeg: state.diveDeg, maxLevelS: 3, gapStep: 60 }, extra || {});
   }
   function quickRun(extra, gaps, speeds) {
     const p = A.parseSequence(state.seq); if (state.entry) p.entry = state.entry;
@@ -2183,9 +2212,6 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     if (F.length) { const cx = F.reduce((s, f) => s + (f.minX + f.maxX) / 2, 0) / F.length;
       add(Math.abs(cx) > 100 ? 'warn' : 'ok', `Positioning: the flight is centred ${Math.abs(Math.round(cx))} m ${cx > 0 ? dirName(1, 0) : dirName(-1, 0)} of the secondary axis (best marks when centred, 4.1.5.5).`); }
     // 4.1.4.3 / 4.4.1.2 no free space between figures
-    if (civa) add('', 'Main-axis lines must be flown in the direction drawn on Form B/C (B.6.1.2); only secondary-axis directions are free, so only those are offered as direction options.');
-    if (civa) add('', 'Before the wing rocks (3.9.1.1): at least two half rolls with an inverted stop plus one practice figure, inside the box. Wing rocks: 3, more than 45° bank, inside or outside the box, any flight path (3.10.2).');
-    if (civa) add('', 'Judging assumptions used here: loops wind-corrected to stay round, verticals and 45s judged on attitude so they drift, horizontal lines judged on flight path, turns and rolling turns not wind-corrected (B.3, B.7, B.9).');
     return `<b>${civa ? 'CIVA rules check' : 'Rules check'}</b><ul class="notes" style="margin-top:4px">${items.join('')}</ul>`;
   }
   function renderStrategy() {
@@ -2206,8 +2232,8 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     const v1 = f1 ? Math.round(f1.v / KT) : Math.round(state.ac.ventry);
     el.innerHTML =
       `<b>Use ${esc(formInfo().text)}</b>.<br>` +
-      `<b>Entry</b>: dive in from the ${esc(endName)}, flying ${esc(dirName(hx, hy))}${into}, with 3 wing wags from ${Math.round(state.startAlt + state.diveFt).toLocaleString()} ft. Be level at ${Math.round(state.startAlt).toLocaleString()} ft and ${v1} kt as you cross ${inEnd > 2 ? inEnd + ' m inside the' : 'the'} ${esc(endName)} edge, on a line <b>${fromFront} m</b> back from the front edge.<br>` +
-      `<b>Drive in</b> ${drive} m level (bleed or airbrake to ${v1} kt if fast), then start figure 1.<br>` +
+      `<b>Entry</b>: dive in from the ${esc(endName)}, flying ${esc(dirName(hx, hy))}${into}, wags from ${R.entryInfo ? ftUp(R.entryInfo.topZ).toLocaleString() : Math.round(state.startAlt + state.diveFt).toLocaleString()} ft. Level at ${Math.round(state.startAlt).toLocaleString()} ft and ${v1} kt as you cross ${inEnd > 2 ? inEnd + ' m inside the' : 'the'} ${esc(endName)} edge, on a line <b>${fromFront} m</b> back from the front edge.<br>` +
+      `<b>Level</b> ${f1 ? (drive / Math.max(1, f1.v)).toFixed(1) : '0'} s (${drive} m), then figure 1.<br>` +
       (() => {
         const ar = seqAltRange(R), lo = ftDn(ar.lo), hi = ftUp(ar.hi);
         const above = lo - state.lowFt, below = state.highFt - hi, need = hi - lo, room = state.highFt - state.lowFt - state.floorFt;
@@ -2216,7 +2242,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
           (below >= 0 ? `(${below} ft below the top).` : `<span style="color:var(--bad)">(${-below} ft over the ${state.highFt.toLocaleString()} ft top — the sequence needs ${need.toLocaleString()} ft but the box leaves ${room.toLocaleString()} ft above your floor).</span>`) + '<br>';
       })() +
       `<b>Last figure</b> (#${lf.i + 1}) centered ${cy} m in from the front edge — target ${tgt} m <span class="pill ${ok ? 'ok' : 'warn'}">${ok ? 'ON TARGET' : cy > tgt ? 'TOO FAR BACK' : 'TOO CLOSE TO JUDGES'}</span><br>` +
-      `<b>Exit</b>: 3 wing wags at about ${ftDn(ex.p[2]).toLocaleString()} ft, then depart ${esc(exitDir)}.${ex.f[1] < -0.7 ? ' <span style="color:var(--warn)">This departure points at the judges: turn away after the wags.</span>' : ''}<br>` +
+      `<b>Exit</b>: wags at ${ftDn(ex.p[2]).toLocaleString()} ft, heading ${esc(exitDir)}.<br>` +
       (!ok && !vk.length && state.startY !== null ? `<span class="note">The ${state.finishPct}% target can't be reached without crossing the ${state.marginPct}% line in this wind, so the box limit wins. Crosswind correction inside figures, a later wind, or shorter lines would move it closer.</span><br>` : '') +
       (vk.length ? `<span style="color:var(--bad)"><b>Box check (${state.marginPct}%):</b> ` + vk.map(k => `${esc(k)} ${Math.round(v[k].over)} m past the ${state.marginPct}% line at the ${esc(v[k].side)}`).join('; ') + '.</span>'
         : `<span style="color:var(--ok)"><b>Box check (${state.marginPct}%):</b> everything from the entry wags to the exit wags stays at least ${marginM()} m inside the box.</span>`) + '<div style="margin-top:8px">' + rulesCheck() + '</div>';
@@ -2228,7 +2254,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   $('startXIn').addEventListener('input', () => { const v = parseFloat($('startXIn').value); state.startX = isNaN(v) ? null : v; state.solvedX = false; rerun(); });
   $('startYIn').addEventListener('input', () => { const v = parseFloat($('startYIn').value); state.startY = isNaN(v) ? null : v; rerun(); });
   $('marginPct').addEventListener('input', () => { const v = parseFloat($('marginPct').value); if (!isNaN(v)) { state.marginPct = Math.max(0, Math.min(20, v)); rerun(); } });
-  $('diveFt').addEventListener('input', () => { const v = parseFloat($('diveFt').value); if (!isNaN(v)) { state.diveFt = Math.max(0, v); rerun(); } });
+  $('diveDeg').addEventListener('input', () => { const v = parseFloat($('diveDeg').value); if (!isNaN(v)) { state.diveDeg = Math.max(0, Math.min(70, v)); rerun(); } });
   $('autoSolve').addEventListener('change', () => { state.autoSolve = $('autoSolve').checked; save(); if (state.autoSolve) solve(); });
 
 
@@ -2248,9 +2274,9 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   const WX = { top: [], side: [], last: 0 };
   function fxSetup(id) { const cv = $(id); const dpr = window.devicePixelRatio || 1, r = cv.getBoundingClientRect(); if (cv.width !== Math.round(r.width * dpr) || cv.height !== Math.round(r.height * dpr)) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); } const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); return { ctx, w: r.width, h: r.height }; }
   function windTick(now) {
-    $('windMax').onclick = () => { const s = strongestInBox(); if (!s) return; state.windFollow = false; state.windLevelFt = Math.round(s.z / FT / 100) * 100; $('windLevel').value = state.windLevelFt; save(); };
+    $('windMax').onclick = () => { const s = strongestInBox(); if (!s) return; state.windMode = 'max'; state.windLevelFt = Math.round(s.z / FT / 100) * 100; $('windLevel').value = state.windLevelFt; save(); };
   $('windLevel').value = state.windLevelFt;
-  $('windLevel').addEventListener('input', () => { state.windLevelFt = +$('windLevel').value; state.windFollow = false; save(); });
+  $('windLevel').addEventListener('input', () => { state.windLevelFt = +$('windLevel').value; state.windMode = 'manual'; save(); });
   requestAnimationFrame(windTick);
     if (now - WX.last < 33) return; const dtw = Math.min(0.1, (now - WX.last) / 1000); WX.last = now;
     const on = state.showWind !== false && topXf && sideXf;
@@ -2259,16 +2285,17 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     if (!on) return;
     const col = css('--accent2'), speedUp = 18; // exaggerate drift so it is visible
     // top view: the wind at the aircraft's current height
-    const zNow = state.windFollow !== false ? (R && R.samples.length ? R.samples[idxAt(T)].z : state.startAlt * FT) : state.windLevelFt * FT;
+    const sMax = state.windMode !== 'manual' ? strongestInBox() : null;
+    const zNow = sMax ? sMax.z : state.windLevelFt * FT; // default: the strongest wind inside the box limits
     WX.z = zNow;
     const w = windAtZ(zNow), B = topXf.B;
     if (WX.top.length < 140) for (let k = WX.top.length; k < 140; k++) WX.top.push({ x: B.x0 + Math.random() * (B.x1 - B.x0), y: B.y0 + Math.random() * (B.y1 - B.y0), age: Math.random() * 80 });
-    const ct = T1.ctx; ct.strokeStyle = col; ct.lineWidth = 1.3; ct.lineCap = 'round';
+    const ct = T1.ctx; ct.strokeStyle = col; ct.lineWidth = 1.9; ct.lineCap = 'round';
     for (const p of WX.top) {
       if (!reduceMotion) { p.x += w[0] * dtw * speedUp; p.y += w[1] * dtw * speedUp; p.age += 1; }
       if (p.x < B.x0 || p.x > B.x1 || p.y < B.y0 || p.y > B.y1 || p.age > 90) { p.x = B.x0 + Math.random() * (B.x1 - B.x0); p.y = B.y0 + Math.random() * (B.y1 - B.y0); p.age = 0; }
-      const a = topXf.P(p), b = topXf.P({ x: p.x - w[0] * 3, y: p.y - w[1] * 3 });
-      ct.globalAlpha = 0.28 * Math.sin(Math.PI * Math.min(1, p.age / 90)); ct.beginPath(); ct.moveTo(b[0], b[1]); ct.lineTo(a[0], a[1]); ct.stroke();
+      const a = topXf.P(p), b = topXf.P({ x: p.x - w[0] * 4, y: p.y - w[1] * 4 });
+      ct.globalAlpha = 0.55 * Math.sin(Math.PI * Math.min(1, p.age / 90)); ct.beginPath(); ct.moveTo(b[0], b[1]); ct.lineTo(a[0], a[1]); ct.stroke();
     }
     ct.globalAlpha = 1;
     ct.font = '600 11px ' + css('--f-display'); ct.fillStyle = col; ct.textAlign = 'left'; ct.textBaseline = 'bottom';
@@ -2279,54 +2306,25 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     const fromDeg = Math.round((Math.atan2(-east, -north) * 180 / Math.PI + 360) % 360);
     ct.fillText(`moving wind at ${Math.round(zNow / FT).toLocaleString()} ft: ${String(fromDeg).padStart(3, '0')}° / ${kt.toFixed(0)} kt`, 8, T1.h - 6);
     const wlv = `${Math.round(zNow / FT).toLocaleString()} ft · ${String(fromDeg).padStart(3, '0')}°/${kt.toFixed(0)} kt`; if ($('windLevelVal').textContent !== wlv) $('windLevelVal').textContent = wlv;
-    if (state.windFollow !== false) { const v = Math.round(zNow / FT / 100) * 100; if (+$('windLevel').value !== v) $('windLevel').value = v; }
+    if (sMax) { const v = Math.round(zNow / FT / 100) * 100; if (+$('windLevel').value !== v) $('windLevel').value = v; }
     // side view: streaks at many heights, each moving with the along-box wind at its height
-    const s = sideXf, cs = S1.ctx; cs.strokeStyle = col; cs.lineWidth = 1.2; cs.lineCap = 'round';
+    const s = sideXf, cs = S1.ctx; cs.strokeStyle = col; cs.lineWidth = 1.7; cs.lineCap = 'round';
     if (WX.side.length < 120) for (let k = WX.side.length; k < 120; k++) WX.side.push({ x: s.x0 + Math.random() * (s.x1 - s.x0), z: s.zmin + Math.random() * (s.zmax - s.zmin), age: Math.random() * 80 });
     for (const p of WX.side) {
       const wz = windAtZ(p.z);
       if (!reduceMotion) { p.x += wz[0] * dtw * speedUp; p.age += 1; }
       if (p.x < s.x0 || p.x > s.x1 || p.age > 90) { p.x = s.x0 + Math.random() * (s.x1 - s.x0); p.z = Math.max(0, s.zmin + Math.random() * (s.zmax - s.zmin)); p.age = 0; }
       const a = s.P({ x: p.x, z: p.z }), b = s.P({ x: p.x - wz[0] * 3.5, z: p.z });
-      cs.globalAlpha = 0.3 * Math.sin(Math.PI * Math.min(1, p.age / 90)); cs.beginPath(); cs.moveTo(b[0], b[1]); cs.lineTo(a[0], a[1]); cs.stroke();
+      cs.globalAlpha = 0.55 * Math.sin(Math.PI * Math.min(1, p.age / 90)); cs.beginPath(); cs.moveTo(b[0], b[1]); cs.lineTo(a[0], a[1]); cs.stroke();
     }
     cs.globalAlpha = 1;
-    // wind profile at the right edge: speed and direction by height, with the strongest wind inside the box limits
-    const xr = s.w - s.padR - 104, xa = xr + 30;
-    const strongest = strongestInBox();
-    cs.fillStyle = css('--panel'); cs.globalAlpha = 0.82; cs.fillRect(xr - 22, s.padT + 14, 126, s.h - s.padT - s.padB - 12); cs.globalAlpha = 1;
-    cs.font = '600 10px ' + css('--f-display'); cs.fillStyle = col; cs.textAlign = 'center'; cs.textBaseline = 'top';
-    cs.fillText('WIND BY HEIGHT', xa + 20, s.padT + 17);
-    cs.font = '9.5px ' + css('--f-mono'); cs.fillText('speed   direction', xa + 20, s.padT + 30);
-    // speed curve (total speed), scale 2.2 px per kt
-    cs.strokeStyle = col; cs.lineWidth = 2; cs.beginPath();
-    let first = true;
-    for (let z = Math.max(0, s.zmin); z <= s.zmax; z += 15) { const wz = windAtZ(z); const y = s.P({ x: 0, z })[1]; const x = xr - 16 + Math.hypot(wz[0], wz[1]) / KT * 2.0; first ? cs.moveTo(x, y) : cs.lineTo(x, y); first = false; }
-    cs.stroke();
-    // direction arrows every 500 ft (box frame: right = +x along box, up = away from judges)
-    cs.lineWidth = 1.6;
-    for (let f = 0; f * FT <= s.zmax; f += 500) {
-      const z = f * FT; if (z < s.zmin) continue;
-      const wz = windAtZ(z), m = Math.hypot(wz[0], wz[1]); if (m < 0.2) continue;
-      const y = s.P({ x: 0, z })[1], L = Math.min(14, 4 + m / KT / 2), dx = wz[0] / m * L, dy = -wz[1] / m * L;
-      const cx = xa + 56, an = Math.atan2(dy, dx);
-      cs.beginPath(); cs.moveTo(cx - dx, y - dy); cs.lineTo(cx + dx, y + dy); cs.stroke();
-      cs.beginPath(); cs.moveTo(cx + dx, y + dy); cs.lineTo(cx + dx - 4 * Math.cos(an - 0.5), y + dy - 4 * Math.sin(an - 0.5)); cs.lineTo(cx + dx - 4 * Math.cos(an + 0.5), y + dy - 4 * Math.sin(an + 0.5)); cs.closePath(); cs.fill();
-    }
-    // strongest wind inside the box limits
-    if (strongest) {
-      const y = s.P({ x: 0, z: strongest.z })[1], x = xr - 16 + strongest.kt * 2.0;
-      cs.strokeStyle = css('--warn'); cs.lineWidth = 2; cs.beginPath(); cs.arc(x, y, 5, 0, Math.PI * 2); cs.stroke();
-      cs.setLineDash([3, 3]); cs.lineWidth = 1; cs.beginPath(); cs.moveTo(s.padL, y); cs.lineTo(xr - 22, y); cs.stroke(); cs.setLineDash([]);
-      cs.font = '600 10.5px ' + css('--f-display'); cs.fillStyle = css('--warn'); cs.textAlign = 'right'; cs.textBaseline = 'bottom';
-      cs.fillText(`STRONGEST IN BOX · ${Math.round(strongest.z / FT).toLocaleString()} FT · ${String(strongest.from).padStart(3, '0')}°/${strongest.kt.toFixed(0)} KT`, xr - 26, y - 2);
-    }
-    { const yl = s.P({ x: 0, z: zNow })[1]; cs.strokeStyle = col; cs.globalAlpha = 0.55; cs.setLineDash([4, 4]); cs.lineWidth = 1; cs.beginPath(); cs.moveTo(s.padL, yl); cs.lineTo(xr - 22, yl); cs.stroke(); cs.setLineDash([]); cs.globalAlpha = 1;
-      cs.font = '600 10px ' + css('--f-display'); cs.fillStyle = col; cs.textAlign = 'left'; cs.textBaseline = 'bottom'; cs.fillText(`WIND SHOWN IN BOX · ${Math.round(zNow / FT).toLocaleString()} FT`, s.padL + 4, yl - 2); }
+    const xr = s.w - s.padR + 22; // wind-by-height panel removed; the wind level line runs the full width
+    { const yl = s.P({ x: 0, z: zNow })[1]; cs.strokeStyle = col; cs.globalAlpha = 0.85; cs.setLineDash([5, 4]); cs.lineWidth = 1.5; cs.beginPath(); cs.moveTo(s.padL, yl); cs.lineTo(xr - 22, yl); cs.stroke(); cs.setLineDash([]); cs.globalAlpha = 1;
+      cs.font = '600 10px ' + css('--f-display'); cs.fillStyle = col; cs.textAlign = 'left'; cs.textBaseline = 'bottom'; cs.fillText(`${sMax ? 'STRONGEST WIND IN BOX' : 'WIND SHOWN'} · ${Math.round(zNow / FT / 100) * 100 ? (Math.round(zNow / FT / 100) * 100).toLocaleString() : 0} FT · ${String(fromDeg).padStart(3, '0')}°/${kt.toFixed(0)} KT`, s.padL + 4, yl - 3); }
   }
-  $('windMax').onclick = () => { const s = strongestInBox(); if (!s) return; state.windFollow = false; state.windLevelFt = Math.round(s.z / FT / 100) * 100; $('windLevel').value = state.windLevelFt; save(); };
+  $('windMax').onclick = () => { const s = strongestInBox(); if (!s) return; state.windMode = 'max'; state.windLevelFt = Math.round(s.z / FT / 100) * 100; $('windLevel').value = state.windLevelFt; save(); };
   $('windLevel').value = state.windLevelFt;
-  $('windLevel').addEventListener('input', () => { state.windLevelFt = +$('windLevel').value; state.windFollow = false; save(); });
+  $('windLevel').addEventListener('input', () => { state.windLevelFt = +$('windLevel').value; state.windMode = 'manual'; save(); });
   requestAnimationFrame(windTick);
 
   // ---------- table & stats ----------
@@ -2449,7 +2447,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   $('loopPlay').checked = state.loopPlay !== false;
   $('loopPlay').addEventListener('change', () => { state.loopPlay = $('loopPlay').checked; save(); });
   $('play').onclick = () => {
-    if (!R) return; playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play'; if (playing) state.windFollow = true;
+    if (!R) return; playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play'; 
     if (playing) { if (T >= R.end.t - 0.01) T = 0; last = performance.now(); requestAnimationFrame(tick); }
   };
   function tick(now) {
