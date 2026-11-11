@@ -251,6 +251,7 @@ details[open] summary{margin-bottom:8px}
       <div class="player" style="margin-top:8px">
         <button id="play">Play</button>
         <select id="spd" style="width:auto"><option value="1">1×</option><option value="4" selected>4×</option><option value="10">10×</option></select>
+        <label class="check" style="font-size:13px;white-space:nowrap"><input type="checkbox" id="loopPlay" checked> Loop</label>
         <input type="range" id="scrub" min="0" max="1000" value="1000" aria-label="Time">
         <span class="readout" id="readout"></span>
       </div>
@@ -1177,7 +1178,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   let state = {
     seq: SAMPLE, ac: {}, preset: 'Sukhoi Su-26', wind: DEFAULT_WIND.map(r => r.slice()), altRef: 'msl', elev: 0,
     rules: 'CIVA Advanced (power)', lowFt: 656, highFt: 3609, facing: 0, jdist: 150, startAlt: 2500, energy: 'managed',
-    autoGap: true, crab: false, crabAll: false, roundLoops: true, showWind: true, windFollow: true, windLevelFt: 3000, showCalm: false, entry: '', figOpts: [], form: 'B', fview: 'aresti', floorFt: 300, comfortM: 300, finishPct: 20, startX: null, startY: null, marginPct: 5, diveFt: 300, autoSolve: true,
+    autoGap: true, crab: false, crabAll: false, roundLoops: true, showWind: true, windFollow: true, windLevelFt: 3000, showCalm: false, entry: '', figOpts: [], form: 'B', fview: 'aresti', floorFt: 300, comfortM: 300, finishPct: 20, startX: null, startY: null, marginPct: 5, diveFt: 300, autoSolve: true, loopPlay: true,
   };
   [...FIELDS, ...MORE].forEach(([k, , v]) => state.ac[k] = v);
   Object.assign(state.ac, PRESETS[state.preset]);
@@ -2444,7 +2445,9 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
     sel = best < 400 ? (sel === bi ? -1 : bi) : -1; renderTable(); draw();
   });
   $('scrub').addEventListener('input', () => { if (!R) return; T = R.end.t * $('scrub').value / 1000; draw(); });
-  let playing = false, last = 0;
+  let playing = false, last = 0, holdUntil = 0;
+  $('loopPlay').checked = state.loopPlay !== false;
+  $('loopPlay').addEventListener('change', () => { state.loopPlay = $('loopPlay').checked; save(); });
   $('play').onclick = () => {
     if (!R) return; playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play'; if (playing) state.windFollow = true;
     if (playing) { if (T >= R.end.t - 0.01) T = 0; last = performance.now(); requestAnimationFrame(tick); }
@@ -2452,7 +2455,11 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   function tick(now) {
     if (!playing) return;
     T += (now - last) / 1000 * +$('spd').value; last = now;
-    if (T >= R.end.t) { T = R.end.t; playing = false; $('play').textContent = 'Play'; }
+    if (T >= R.end.t) {
+      T = R.end.t;
+      if (state.loopPlay !== false) { if (!holdUntil) holdUntil = now + 1500; else if (now >= holdUntil) { T = 0; holdUntil = 0; } } // pause 1.5 s on the finish, then replay
+      else { playing = false; $('play').textContent = 'Play'; }
+    } else holdUntil = 0;
     $('scrub').value = Math.round(T / R.end.t * 1000); draw();
     if (playing) requestAnimationFrame(tick);
   }
@@ -2623,7 +2630,8 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
   initTeam();
 
   run();
-  if (freshStart || state.autoSolve) setTimeout(() => solve(), 300); // open the demo in a solved, in-the-box state
+  if (freshStart || state.autoSolve) setTimeout(() => solve(), 300);
+  { const autoplay = () => { if (playing) return; if (solving || !R) return setTimeout(autoplay, 300); if (state.loopPlay !== false) { T = R.end.t; $('play').click(); } }; setTimeout(autoplay, 900); } // open the demo in a solved, in-the-box state
 })();
 
 </script>
