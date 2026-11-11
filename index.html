@@ -800,10 +800,22 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
       const rate = () => rolling ? ac.rtRate * D2R : g * Math.tan(bank) / st.v;
       const trid = ++rollSeq;
       const tl = o.deg + '° ' + (rolling ? 'rolling turn, ' + o.rolls + (o.rolls === 1 ? ' roll' : ' rolls') + (o.alt ? ' alternating' : o.outside ? ' outside' : ' inside') : 'turn');
+      // attitude: a turn banks into the turn (rolled in and out over ~0.5 s); a rolling turn rolls continuously,
+      // inside = toward the turn, outside = away, alternating = direction reverses each roll
+      const upL = [0, 0, st.u[2] < 0 ? -1 : 1], into = -sign * (st.u[2] < 0 ? -1 : 1); // +phi banks right (body axes)
+      const ramp = Math.max(1e-6, rate() * 0.5);
+      const phiAt = d => {
+        if (!rolling) return into * bank * Math.min(1, d / ramp, (total - d) / ramp);
+        const r = d / total * o.rolls, k = Math.min(o.rolls - 1, Math.floor(r)), fr = r - k;
+        const dir = into * (o.outside ? -1 : 1);
+        if (!o.alt) return dir * r * 2 * Math.PI;
+        return dir * (k % 2 ? -1 : 1) * fr * 2 * Math.PI;   // alternate: each roll ends wings level, next goes the other way
+      };
       while (done < total - 1e-9) {
         const dth = Math.min(rate() * dt, total - done);
         st.f = norm(rotAbout(st.f, [0, 0, 1], sign * dth));
         done += dth; ci++;
+        st.u = norm(rotAbout(upL, st.f, phiAt(done)));
         step(1 / Math.cos(bank), { el: rolling ? 'rolling turn' : 'turn', throttle: ac.tw, rl: tl, rid: trid });
       }
       st.f = norm([st.f[0], st.f[1], 0]);
@@ -993,7 +1005,7 @@ window.FIGS=["v4 9.1.1.1(6:9)","v2 9.1.1.2(8:12)","v3 9.1.1.3(10:0)","v1 9.1.1.4
           const fast = Object.assign(Object.create(Sim.prototype), sim, { dt: 0.12 });
           const H = env.boxHalf || 500, mg = env.margin || 0;
           let best = Infinity, bestOver = Infinity;
-          const tradeMode = env.energyMode === 'trade' && !o.vEntry && !hasSpin;
+          const tradeMode = (env.energyMode === 'trade' || env.energyMode === 'managed') && !o.vEntry && !hasSpin; // enter slower (smaller figure) when it would not fit
           const factors = tradeMode ? [1, 0.93, 0.86, 0.8] : [1];
           for (const fct of factors) {
             if (fct < 1 && bestOver < 1) break; // only enter slower when the figure would not fit
